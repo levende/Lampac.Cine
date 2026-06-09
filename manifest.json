@@ -1,0 +1,10 @@
+{
+  "enable": true,
+  "tree": [
+    "CineService.cs",
+    "CineController.cs",
+    "Model.cs",
+    "ModInit.cs",
+    "ModuleConf.cs"
+  ]
+}
