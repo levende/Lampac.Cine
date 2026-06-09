@@ -1,5 +1,6 @@
 Source: https://cinetorrent.xyz
 
+init.conf:
 ```
 {
     "Cine": {
@@ -7,4 +8,9 @@ Source: https://cinetorrent.xyz
         "passwd": "passwd"
     }
 }
+```
+
+repository.yaml:
+```
+- repository: https://github.com/levende/Lampac.Cine
 ```

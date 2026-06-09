@@ -14,6 +14,11 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
     public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
     {
+        if (string.IsNullOrEmpty(conf?.login) || string.IsNullOrEmpty(conf?.passwd))
+        {
+            return [];
+        }
+
         return new List<ModuleOnlineItem>()
         {
             new(conf)
