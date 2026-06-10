@@ -52,7 +52,7 @@ public class CineService
         var proxy = _proxyManager?.Get();
         var cookieContainer = await EnsureAuthorizedAsync(proxy);
 
-        var movie = await Http.Get<MovieModel>(
+        var movie = await Shared.Services.Http.Get<MovieModel>(
             $"{_config.host}/api/cinetorrent-playlist?media_type=movie&kp_id={kpId}",
             useDefaultHeaders: true,
             cookieContainer: cookieContainer,
@@ -68,7 +68,7 @@ public class CineService
         var proxy = _proxyManager?.Get();
         var cookieContainer = await EnsureAuthorizedAsync(proxy);
 
-        var series = await Http.Get<SeriesModel>(
+        var series = await Shared.Services.Http.Get<SeriesModel>(
             $"{_config.host}/api/cinetorrent-playlist?media_type=tv&kp_id={kpId}",
             useDefaultHeaders: true,
             cookieContainer: cookieContainer);
@@ -156,7 +156,7 @@ public class CineService
             string domain = Regex.Match(_config.host, "https?://([^/]+)").Groups[1].Value;
             var cookieContainer = new CookieContainer();
 
-            var csrf = await Http.BaseGetAsync<CsrfResponse>($"{uri.Scheme}://{uri.Authority}/api/auth/csrf", proxy: proxy, cookieContainer: cookieContainer);
+            var csrf = await Shared.Services.Http.BaseGetAsync<CsrfResponse>($"{uri.Scheme}://{uri.Authority}/api/auth/csrf", proxy: proxy, cookieContainer: cookieContainer);
 
             if (string.IsNullOrEmpty(csrf.content?.csrfToken)
                 || !csrf.response.Headers.TryGetValues("Set-Cookie", out var csrfCookieHeaders))
@@ -180,7 +180,7 @@ public class CineService
                 $"&json=true";
 
             using var postContent = new StringContent(postContentStr, Encoding.UTF8, "application/x-www-form-urlencoded");
-            var auth = await Http.BasePost($"{uri.Scheme}://{uri.Authority}/api/auth/callback/credentials",
+            var auth = await Shared.Services.Http.BasePost($"{uri.Scheme}://{uri.Authority}/api/auth/callback/credentials",
                 postContent,
                 cookieContainer: cookieContainer,
                 proxy: proxy
@@ -236,7 +236,7 @@ public class CineService
 
         try
         {
-            var sessionResponse = await Http.Get<AuthResponse>(
+            var sessionResponse = await Shared.Services.Http.Get<AuthResponse>(
                 $"{_config.host}/api/auth/session",
                 useDefaultHeaders: true,
                 cookieContainer: cookieContainer);
@@ -279,15 +279,15 @@ public class CineService
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             });
 
-            File.WriteAllText(CacheFilepath, json);
+            System.IO.File.WriteAllText(CacheFilepath, json);
         }
     }
 
     private static CineData LoadData()
     {
-        if (File.Exists(CacheFilepath))
+        if (System.IO.File.Exists(CacheFilepath))
         {
-            var json = File.ReadAllText(CacheFilepath);
+            var json = System.IO.File.ReadAllText(CacheFilepath);
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             return JsonSerializer.Deserialize<CineData>(json, options) ?? new CineData();
         }
