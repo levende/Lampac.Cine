@@ -1,6 +1,5 @@
 using Shared.Services;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -10,6 +9,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using static System.Net.WebRequestMethods;
 
 namespace Cine;
 
@@ -31,6 +31,8 @@ public class CineService
     private static CookieContainer? _cookieContainer;
 
     private readonly ModuleConf _config;
+    private readonly ProxyManager _proxyManager;
+
 
     static CineService()
     {
@@ -39,36 +41,44 @@ public class CineService
         _cacheLastSaveTime = _cacheData.lastUpdated;
     }
 
-    public CineService(ModuleConf conf)
+    public CineService(ProxyManager proxyManager, ModuleConf conf)
     {
+        _proxyManager = proxyManager;
         _config = conf;
     }
 
     public async Task<MovieModel> FindMovieAsync(long kpId)
     {
-        var cookieContainer = await EnsureAuthorizedAsync();
+        var proxy = _proxyManager?.Get();
+        var cookieContainer = await EnsureAuthorizedAsync(proxy);
 
         var movie = await Http.Get<MovieModel>(
             $"{_config.host}/api/cinetorrent-playlist?media_type=movie&kp_id={kpId}",
             useDefaultHeaders: true,
-            cookieContainer: cookieContainer);
+            cookieContainer: cookieContainer,
+            proxy: proxy);
+
+        _proxyManager?.Refresh();
 
         return movie;
     }
 
     public async Task<SeriesModel> FindSeriesAsync(long kpId)
     {
-        var cookieContainer = await EnsureAuthorizedAsync();
+        var proxy = _proxyManager?.Get();
+        var cookieContainer = await EnsureAuthorizedAsync(proxy);
 
         var series = await Http.Get<SeriesModel>(
             $"{_config.host}/api/cinetorrent-playlist?media_type=tv&kp_id={kpId}",
             useDefaultHeaders: true,
             cookieContainer: cookieContainer);
 
+        _proxyManager?.Refresh();
+
         return series;
     }
 
-    public async Task<CookieContainer> EnsureAuthorizedAsync()
+    public async Task<CookieContainer> EnsureAuthorizedAsync(WebProxy proxy)
     {
         var needLogin = false;
 
@@ -90,7 +100,7 @@ public class CineService
 
         if (needLogin)
         {
-            await LoginAsync();
+            await LoginAsync(proxy);
             return _cookieContainer;
         }
 
@@ -98,7 +108,7 @@ public class CineService
 
         if (!sessionResult.Success)
         {
-            await LoginAsync();
+            await LoginAsync(proxy);
         }
         else
         {
@@ -129,7 +139,7 @@ public class CineService
         });
     }
 
-    private async Task LoginAsync()
+    private async Task LoginAsync(WebProxy proxy)
     {
         await LoginSemaphore.WaitAsync();
         try
@@ -142,79 +152,62 @@ public class CineService
                 }
             }
 
-            using var clientHandler = new HttpClientHandler
-            {
-                AllowAutoRedirect = false,
-                ServerCertificateCustomValidationCallback = Http.AlwaysAllowCertificate,
-                CookieContainer = new CookieContainer(),
-            };
+            var uri = new Uri(_config.host);
+            string domain = Regex.Match(_config.host, "https?://([^/]+)").Groups[1].Value;
+            var cookieContainer = new CookieContainer();
 
-            var baseAddress = new Uri(_config.host);
+            var csrf = await Http.BaseGetAsync<CsrfResponse>($"{uri.Scheme}://{uri.Authority}/api/auth/csrf", proxy: proxy, cookieContainer: cookieContainer);
 
-            using var client = new HttpClient(clientHandler)
-            {
-                BaseAddress = baseAddress,
-                Timeout = TimeSpan.FromSeconds(10)
-            };
-
-            foreach (var h in Http.defaultFullHeaders)
-            {
-                client.DefaultRequestHeaders.TryAddWithoutValidation(h.Key, h.Value);
-            }
-
-            var cfrfResponse = await client.GetAsync("/api/auth/csrf");
-            cfrfResponse.EnsureSuccessStatusCode();
-
-            var csrfBytes = await cfrfResponse.Content.ReadAsByteArrayAsync();
-            var reader = new Utf8JsonReader(csrfBytes);
-            string csrfToken = null;
-
-            while (reader.Read())
-            {
-                if (reader.TokenType == JsonTokenType.PropertyName && reader.ValueTextEquals("csrfToken"u8))
-                {
-                    reader.Read();
-                    csrfToken = reader.GetString();
-                    break;
-                }
-            }
-
-            if (csrfToken is null)
+            if (string.IsNullOrEmpty(csrf.content?.csrfToken)
+                || !csrf.response.Headers.TryGetValues("Set-Cookie", out var csrfCookieHeaders))
             {
                 throw new InvalidOperationException("CSRF");
             }
 
-            // Формируем POST-контент напрямую через StringBuilder — без Dictionary
+            foreach (var cookie in csrfCookieHeaders)
+            {
+                cookieContainer.SetCookies(
+                    csrf.response.RequestMessage!.RequestUri!,
+                    cookie
+                );
+            }
+
             var postContentStr = $"email={Uri.EscapeDataString(_config.login)}" +
                 $"&password={Uri.EscapeDataString(_config.passwd)}" +
-                $"&csrfToken={Uri.EscapeDataString(csrfToken)}" +
-                $"&callbackUrl={Uri.EscapeDataString($"{baseAddress.Scheme}://{baseAddress.Authority}/login")}" +
+                $"&csrfToken={Uri.EscapeDataString(csrf.content.csrfToken)}" +
+                $"&callbackUrl={Uri.EscapeDataString($"{uri.Scheme}://{uri.Authority}/login")}" +
                 $"&redirect=false" +
                 $"&json=true";
 
             using var postContent = new StringContent(postContentStr, Encoding.UTF8, "application/x-www-form-urlencoded");
-            var response = await client.PostAsync("/api/auth/callback/credentials", postContent);
+            var auth = await Http.BasePost($"{uri.Scheme}://{uri.Authority}/api/auth/callback/credentials",
+                postContent,
+                cookieContainer: cookieContainer,
+                proxy: proxy
+            );
 
-            var cookies = clientHandler.CookieContainer.GetCookies(baseAddress);
-
-            if (cookies.Count == 0)
+            if (string.IsNullOrEmpty(csrf.content?.csrfToken)
+               || !csrf.response.Headers.TryGetValues("Set-Cookie", out var authCookieHeaders))
             {
-                throw new InvalidOperationException("Session token");
+                throw new InvalidOperationException("CSRF");
             }
 
-            var sessionCookie = cookies.FirstOrDefault(cookie => cookie.Name == SessionTokenName);
-
-            if (string.IsNullOrEmpty(sessionCookie?.Value))
+            foreach (var cookie in authCookieHeaders)
             {
-                throw new InvalidOperationException("Session token");
+                cookieContainer.SetCookies(
+                    csrf.response.RequestMessage!.RequestUri!,
+                    cookie
+                );
             }
 
             lock (StateLock)
             {
+                var sessionCookie = cookieContainer.GetCookies(uri).First(x => x.Name == SessionTokenName);
+
                 _cacheData.token = sessionCookie.Value;
                 _cacheData.tokenExpires = sessionCookie.Expires;
                 _cacheData.lastUpdated = DateTime.UtcNow;
-                _cookieContainer = clientHandler.CookieContainer;
+                _cookieContainer = cookieContainer;
             }
 
             SaveData(force: true);
@@ -309,6 +302,7 @@ public class CineService
         public DateTime? lastUpdated { get; set; }
     }
 
+    private record CsrfResponse(string csrfToken);
     private record AuthResponse(UserInfo? user, string expires);
     private record UserInfo(string? name, string? email, int id, bool isAdmin, bool isBanned);
     private record SessionCheckResult(bool Success, string? Reason, bool IsBanned);

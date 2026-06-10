@@ -14,11 +14,8 @@ namespace Cine;
 
 public class CineController : BaseOnlineController<ModuleConf>
 {
-    private readonly CineService _cineService;
-
     public CineController() : base(ModInit.conf)
     {
-        _cineService = new CineService(ModInit.conf);
     }
 
     [HttpGet, Staticache(manually: true)]
@@ -40,13 +37,18 @@ public class CineController : BaseOnlineController<ModuleConf>
 
     private async Task<ActionResult> FindMovieAsync(long kpId, string title, string original_title)
     {
+        var cineService = new CineService(proxyManager, ModInit.conf);
+
         var cache = await InvokeCacheResult<MovieModel>($"cine:movie:{kpId}", 180, async e =>
         {
-            var movie = await _cineService.FindMovieAsync(kpId);
+            var movie = await cineService.FindMovieAsync(kpId);
             return e.Success(movie);
         });
 
-        var cookies = await _cineService.EnsureAuthorizedAsync();
+        var proxy = proxyManager?.Get();
+        var cookies = await cineService.EnsureAuthorizedAsync(null);
+        proxyManager?.Refresh();
+
         return ContentTpl(cache, () =>
         {
             var mtpl = new MovieTpl(title, original_title, cache.Value.voices.Count);
@@ -70,16 +72,21 @@ public class CineController : BaseOnlineController<ModuleConf>
 
     private async Task<ActionResult> FindSeriesAsync(long kpId, string title, string original_title, int s, string t, bool rjson)
     {
+        var cineService = new CineService(proxyManager, ModInit.conf);
+
         var cache = await InvokeCacheResult<SeriesModel>($"cine:tv:{kpId}", 180, async e =>
         {
-            var series = await _cineService.FindSeriesAsync(kpId);
+            var series = await cineService.FindSeriesAsync(kpId);
             return e.Success(series);
         });
 
         string enc_title = HttpUtility.UrlEncode(title);
         string enc_original_title = HttpUtility.UrlEncode(original_title);
 
-        var cookies = await _cineService.EnsureAuthorizedAsync();
+        var proxy = proxyManager?.Get();
+        var cookies = await cineService.EnsureAuthorizedAsync(proxy);
+        proxyManager?.Refresh();
+
         return ContentTpl(cache, () =>
         {
             if (s == -1)
